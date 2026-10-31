@@ -115,12 +115,27 @@ Each step depends on the one before it, and nothing that changes the car comes b
 5. **Hand-off rules.** Native navigation guidance wins over CarPlay. CarPlay guidance stops cleanly when the phone
    disconnects or arrives (`StopRouteGuidanceUpdates`, clear the HUD).
 
-## 5. What I need from you
+## 5. Target car
 
-- Model / chassis (F30? G01? ...), iDrive I-step (e.g. `NBTevo_Y24073J`), and whether the head unit has navigation
-  (option 609). Your HUD shows native arrows, so it should.
-- Root shell on the head unit (same as the Android Auto install) and the three recon folders zipped. They include
-  `iap2.cfg` with your CarPlay hotspot password: fine to send to me, don't post them publicly.
+| | |
+|---|---|
+| Car | 2018 BMW 440i Convertible (F33 LCI), US market |
+| Head unit | NBT EVO (ID6), software `NBTevo_R191441` (the Android Auto daemon was developed on `NBTevo_T21424I`) |
+| Cluster | 6WB: shows BMW navigation **arrows** only, no video map (owner-confirmed) |
+| HUD | Factory HUD, shows BMW navigation arrows |
+| Access | SSH unlocked; ENET to a laptop for the recon |
+
+What follows from this:
+- **No CarPlay map on the cluster.** The 6WB can't show video, so mirroring the CarPlay map there (the iDrive 7/8
+  feature) is ruled out on the car side. Getting the iPhone to send a second map stream would be a large job on its
+  own anyway. The target is turn arrows, distance and street name on the HUD, and on the 6WB too wherever BMW's own
+  arrows appear.
+- **US market.** Expect distances in miles/feet (`DU_MILES`, `DU_FT`, already decoded) and right-hand traffic.
+- **Different software version.** `R191441` is not the version this repository was built and tested on, so the
+  process names, libraries and paths from `milestone-7` are hints until the recon confirms them.
+
+Still needed: the recon output from step 1. It includes `iap2.cfg` with your CarPlay hotspot password: fine to send
+to me, don't post it publicly.
 
 ## 6. Unknowns, stated plainly
 
