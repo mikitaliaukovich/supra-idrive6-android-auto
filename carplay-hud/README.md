@@ -109,9 +109,11 @@ Each step depends on the one before it, and nothing that changes the car comes b
 4. **BMW output.** BMW's arrows are not icon codes: `NavNBTEvoController` draws them on the HUD and cluster through
    MOST "HUDTerminal" commands (polygons, circles, bitmaps, text, a distance bar). So the output has to draw an arrow
    from the tracker's data the same way, and Apple's junction and exit angles become useful for drawing side roads.
-   Still to find, offline in the copied binary: the HUDTerminal FBlock id and the parameter encoding of each command.
-   The repository's observe-only MOST client (`milestone-7`) could confirm them on the car, but installing it is a
-   write and needs the owner's go-ahead. Because the arrows then travel the same path as BMW's, they show up wherever
+   The interface is mapped from the copied binary (section 8): logical FBlock `0x82`, 29 named commands with their
+   function ids and parameter types. Still to learn: the byte layout of the parameters (number widths, the polygon
+   point stream), the instance and session handshake, and which commands BMW sends for one arrow. The repository's
+   observe-only MOST client (`milestone-7`) can capture that on the car, but installing it is a write and needs the
+   owner's go-ahead. Because the arrows then travel the same path as BMW's, they show up wherever
    BMW's do. Whether the 6WB shows them as well as the HUD is then down to the car's coding and HUD settings, not
    this code.
 5. **Hand-off rules.** Native navigation guidance wins over CarPlay. CarPlay guidance stops cleanly when the phone
@@ -148,8 +150,9 @@ firmware and `iap2.cfg` with the CarPlay hotspot password.
 
 - Message and parameter ids are community-documented, not from Apple's MFi spec. The Identify patch now matches the
   real identification's structure (unit test), but only the iPhone can say whether it accepts the result.
-- How NBT EVO sends arrows to the HUD/KOMBI is known in outline (MOST HUDTerminal), not yet in detail: the FBlock id
-  and the encoding of each drawing command are still to be worked out.
+- How NBT EVO sends arrows to the HUD/KOMBI: the HUDTerminal commands, ids and parameter types are known (section
+  8). Not known yet: the exact bytes of each parameter, whether FBlock `0x82` is remapped at run time, and the
+  sequence BMW sends to draw one arrow. A MOST capture on the car answers all three.
 - Whether the 6WB gets its arrows over MOST like the HUD, or over the SOME/IP guidance service seen in the recon, is
   open.
 - Third-party app support for HUD metadata is up to Apple, Google and Waze. If an app doesn't send `0x5201/0x5202`,
@@ -188,8 +191,8 @@ MIB2, no configuration change can enable it.
   out.
 - The output is a remote drawing interface on MOST, "HUDTerminal" (functions `0x200`–`0x22B`, `0x300`,
   `0xC03`–`0xC09`): create instance, add polygon / circle / bitmap, set position and rotation, set text, set a
-  "potentiometer" (most likely the distance bar), set the guiding step. There are two variants, `TF1_3` and
-  `TF11_13`, and `CKombiFBlock00/01` for the cluster.
+  "potentiometer" (most likely the distance bar), set the guiding step. Full list in section 8. There are two
+  variants, `TF1_3` and `TF11_13`, and `CKombiFBlock00/01` for the cluster.
 - The MOST network controller runs on `hu-jacinto` (`dev-InicServer`); the `most` process on `hu-omap` is its
   client. These MOST messages do not appear in the system log.
 - The controller also has a SOME/IP client for a guidance service (`RICServiceGuidance`, lane guiding data), and
@@ -202,3 +205,61 @@ MIB2, no configuration change can enable it.
 - Never run a system-wide `pidin fds`: it hangs on `io-pkt`. During the recon the HUD and cluster arrows stopped
   appearing until the head unit was restarted, and that hang is the likely cause. `pidin -p <pid> fds` works for
   `mm-ipod` and `Connectivity`, but timed out on `NavNBTEvoController`.
+
+## 8. The HUDTerminal interface (from `NavNBTEvoController`, offline)
+
+Worked out from the binary copied during the recon, without running anything on the car.
+
+- `CHUDTerminalLogDev` is a MOST logical device built on BMW's MOST library (`libimp_sys_most_base_nbt`). It asks
+  for **logical FBlock `0x82`** (`CHBComponentInfo::getMappedLogDev(0x82)`), so the FBlock id on the bus is `0x82`
+  unless the head unit's component configuration maps it to another one.
+- Every command is a MOST method (`CHBLogFuncMethodUnclassified`) whose parameters are typed objects (number,
+  bool, string, stream). The table lists the parameter types in the order the method declares them; the method's
+  result values are in that list too (`ImageGetSize` returns width and height, `IsVisible` a bool), and the error
+  code and error info that nearly every method ends with are left out.
+- Names come from the `HUDTerminal.<name>` call objects. Each one is bound to exactly one method in a single setup
+  function, and the parameter types fit the names (a bool for `SetVisibility`, a string for `TextareaSetText`, a
+  point stream for `ImageAddPolygon`, a 60 KB stream for `ImageAddBitmap`).
+- Number types: `n` is unsigned (or of unknown width), `s8` / `s16` / `s32` are signed with the minimum −128 /
+  −32768 / −2³¹ declared, `n(a..b)` has a declared range, `stream(≤N)` is a byte stream of at most N bytes.
+
+| Function | Name | Parameters |
+|---|---|---|
+| `0x200` | CreateInstance | n, n, n, string, n |
+| `0x201` | GetInstanceId | n, string, n |
+| `0x203` | ReleaseInstance | n |
+| `0x204` | SetVisibility | n, bool |
+| `0x205` | IsVisible | n, bool |
+| `0x20E` | SwitchVisibility | n, n |
+| `0x210` | TextareaSetText | n, string, n |
+| `0x211` | KOMBITextareaSetFormat | n, n, n, n, n, n |
+| `0x215` | ImageSetRotation | n, s16, s16, s16, n |
+| `0x218` | ImageSetLineColor | n, n |
+| `0x219` | ImageSetLineWidth | n, n |
+| `0x21B` | ImageSetFillColor | n, n |
+| `0x21C` | ImageSetFillMode | n, n |
+| `0x21D` | ImageAddPolygon | n, n, n, n (≥ 1), stream(≤400) |
+| `0x21E` | ImageAddCircle | n, n, n, s16, s16, n, s32, s32 |
+| `0x21F` | ImageRemoveItem | n, n, n |
+| `0x220` | ImageRemoveAllItems | n |
+| `0x226` | PotentiometerSetType | n, n, bool |
+| `0x227` | PotentiometerSetValue | n, s32, s8 |
+| `0x229` | PotentiometerSetRange | n, n, s32, s8, s32, s8, s32, s8 |
+| `0x22B` | FrameAddItem | n, n, n, n |
+| `0x300` | TerminalInterface | stream(≤10200) |
+| `0xC03` | ImageSetTextareaFormat | n, n, n, n, n, n, n |
+| `0xC04` | ImageGetSize | n, n, n |
+| `0xC05` | ImageAddBitmap | n, n, n, n, n, n, n, stream(≤60000) |
+| `0xC06` | ImageSetPositionRotation | n, s16, s16, s16, s16, s16, n |
+| `0xC07` | AnimationSetGuidingStep | n, n, n |
+| `0xC08` | CurrentGuidingStep | bool, n |
+| `0xC09` | ImageAddCircleDiameter | n, n, n, s16, s16, n, s32, s32 |
+
+Three more members of the logical device (`0x247`, `0xC01` and one without a function id) are not used by any
+`HUDTerminal.<name>` call.
+
+What this means for step 4: an arrow is a set of images (polygons, circles, bitmaps) on a terminal instance, plus
+text areas for the distance and road name and a potentiometer, most likely the distance bar. Not known from the
+binary alone: the byte width of each `n`, the layout of the polygon point stream, what the leading numbers are
+(instance, image and item handles are the obvious guess), and the order of calls BMW makes for one arrow. A capture
+of FBlock `0x82` traffic while BMW navigation guides answers that, and the replay can then be checked against it.
