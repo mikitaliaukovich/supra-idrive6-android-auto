@@ -1,0 +1,5 @@
+# Data pulled from the head unit: BMW firmware binaries, configs (iap2.cfg holds the CarPlay
+# hotspot password), logs. Never commit or push any of it.
+/car/
+rgd_recon_*/
+iap2.cfg
