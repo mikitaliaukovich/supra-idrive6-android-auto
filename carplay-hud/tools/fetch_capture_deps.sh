@@ -31,7 +31,10 @@ for d in /opt /lib /usr/lib /proc/boot /etc; do
        -o -name '*og[Dd]ev*' -o -name 'servicebroker*.cfg' -o -name 'Trace*.tr' -o -name 'HEADER.txt' \) 2>/dev/null
 done
 EOF
-R "$O /bin/sh -s" < "$OUT/find.sh" | sort -u > "$OUT/found.txt"
+{
+    R "$O /bin/sh -s" < "$OUT/find.sh"
+    echo /mnt/share/nav/NavCtrl_DB.ini   # the nav controller's own settings (IC/HUD drawing, README section 10)
+} | sort -u > "$OUT/found.txt"
 echo "found $(wc -l < "$OUT/found.txt") file(s)"
 
 # Listings only (names and sizes), no contents.

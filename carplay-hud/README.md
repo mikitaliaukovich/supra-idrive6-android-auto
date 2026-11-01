@@ -287,3 +287,41 @@ Steps:
 
 The preloaded logger and the MOST client both need the QNX 6.5 build setup (`build.sh`: the QNX SDP 6.5 Docker
 image and a QNX license file).
+
+## 10. How BMW draws one arrow (offline, from `NavNBTEvoController`'s log strings)
+
+The drawing is split over two processes:
+
+- **`NavigationFully` computes the picture.** Its graphics engine ("NGE") builds the arrow as vector data: polylines
+  with the arrow head appended, polygons and circles with their vertices, plus small bitmaps (road icon, junction
+  view, RLE32-compressed). That is the "TDA / RDA / HG" guidance data from section 7.
+- **`NavNBTEvoController`'s `CIcHudComm` only forwards it.** Per maneuver it logs "triggering command data
+  transmission … polylines: N (with V vertices), polygons: N, bitmaps …" and turns each piece into a HUDTerminal
+  command: polygon or polyline → `ImageAddPolygon`, circle → `ImageAddCircle` / `ImageAddCircleDiameter`, road
+  icon and junction view → `ImageAddBitmap`, street name → `TextareaSetText`, distance and unit → text instances
+  (it skips the send when neither changed), distance bar ("Bargraph") → the potentiometer, range 0–255.
+
+The terminal is set up once, by name:
+
+| Layout | Top frames | Instances |
+|---|---|---|
+| `TF1_3` (older terminal) | `TopFrame`, `TopFrame2`, `TopFrame3` | `Bargraph`, `Bargraph3`, `Distance2/3`, `Unit2/3` |
+| `TF11_13` (newer terminal) | 11, 12, 13, 14 | `Guiding_Arrow_11_1/_2`, `Guiding_Arrow_13_1/_2`, `Guiding_Icon_11_x/13_x`, `Distance_1x_1`, `Unit_1x_1`, `Bargraph_1x_1`, `CCP_1x_1/_2` (lane info) |
+
+Set-up order, from the log strings: `CreateInstance` for every named element, `FrameAddItem` to put them into the
+top frames, then line colour and width, fill colour and mode, potentiometer type and its range 0–255. While
+guiding it switches the visible top frame with the guiding step ("Switching TopFrame … GuidingStep"), turns the
+guide arrow and the junction view on and off with `SetVisibility`, and ends every update with a flush to MOST's
+packetizer. `navigation.ini` only adds that the distance bar is shown in the maneuver's "main" phase.
+
+What follows for the CarPlay output:
+- The HUD and cluster draw vector shapes, so the output must build the arrow itself: a polyline with an arrow
+  head for the route, the side roads from Apple's junction angles, a polygon or circle for roundabouts, plus the
+  street text, the distance and unit, and the bar.
+- Which layout the car's HUD and 6WB use (`TF1_3` or `TF11_13`), the coordinate space (`ImageGetSize` asks for it
+  at run time), and the colours are decided at run time. The capture in section 9 shows them.
+- An alternative to drawing the shapes ourselves would be to feed CarPlay's maneuver into BMW's own engine in
+  `NavigationFully` and let it draw. That boundary (`CRicPiP…ICHUD…` jobs between the two processes) has not been
+  looked at yet.
+- The controller has a bitmap dump switch (`DumpBitmapsFpk` / `DumpBitmapsOldIc`, to `/var/log/bitmap.rle`) that
+  could help the capture; turning it on would be a write on the head unit.
