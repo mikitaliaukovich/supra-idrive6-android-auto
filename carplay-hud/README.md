@@ -80,6 +80,7 @@ iPhone ──iAP2 over TCP on the CarPlay Wi-Fi (uap0)──▶ Connectivity ─
 | `src/iap2_rgd.hpp` | Header-only, C++98 (builds with the QNX GCC 4.4.2 toolchain). iAP2 link packets (`FF 5A`, both checksums), control-session messages (`40 40`), the **Identify patch**, Start/Stop builders, 0x5201/0x5202/0x5204 decoders, iAP2 maneuver type → neutral arrow (kind, angle, roundabout exit, driving side), and a `Tracker` that reduces the stream to what a HUD shows: arrow, "2.4 km", "3 Thang 2" |
 | `tests/test_iap2_rgd.cpp` | Host test: hand-written bytes, Identify patch (order kept, idempotent, lanes optional), the patch run on the car's real identification (rebuilt from the recon, checked against the logged sizes and link header), link-layer rewrap with new checksums, partial updates, maneuver list switching, arrival, lane decode |
 | `tools/rgd_recon.sh` | **Read-only** script for the car shell (writes only to the USB stick). It finds the iAP2 stack, any existing route-guidance code, and KOMBI/HUD/maneuver binaries and configs, copies them for offline reverse engineering, and takes live snapshots (sockets, open files, system log). Not usable as-is on `hu-omap` (no `tr`, `xargs` or `strings` there, see section 7); the recon ran the same steps over SSH instead |
+| `tools/fetch_capture_deps.sh` | Laptop side, **read-only** on the head unit (`find`, `ls`, `cat` over the shared SSH login): copies what the capture plan in section 9 needs into `car/recon/deps_<time>/` and checks each file's size |
 
 Run the test:
 
@@ -111,9 +112,8 @@ Each step depends on the one before it, and nothing that changes the car comes b
    from the tracker's data the same way, and Apple's junction and exit angles become useful for drawing side roads.
    The interface is mapped from the copied binary (section 8): logical FBlock `0x82`, 29 named commands with their
    function ids and parameter types. Still to learn: the byte layout of the parameters (number widths, the polygon
-   point stream), the instance and session handshake, and which commands BMW sends for one arrow. The repository's
-   observe-only MOST client (`milestone-7`) can capture that on the car, but installing it is a write and needs the
-   owner's go-ahead. Because the arrows then travel the same path as BMW's, they show up wherever
+   point stream), the instance and session handshake, and which commands BMW sends for one arrow. A capture on the
+   car answers that; section 9 has the plan. Because the arrows then travel the same path as BMW's, they show up wherever
    BMW's do. Whether the 6WB shows them as well as the HUD is then down to the car's coding and HUD settings, not
    this code.
 5. **Hand-off rules.** Native navigation guidance wins over CarPlay. CarPlay guidance stops cleanly when the phone
@@ -263,3 +263,27 @@ text areas for the distance and road name and a potentiometer, most likely the d
 binary alone: the byte width of each `n`, the layout of the polygon point stream, what the leading numbers are
 (instance, image and item handles are the obvious guess), and the order of calls BMW makes for one arrow. A capture
 of FBlock `0x82` traffic while BMW navigation guides answers that, and the replay can then be checked against it.
+
+## 9. Capture plan for the HUDTerminal traffic
+
+The capture has to see what `NavNBTEvoController` *sends* to FBlock `0x82`. Three ways were looked at, offline:
+
+| Way | What it sees | What it needs on the car |
+|---|---|---|
+| Repository MOST client (`milestone-7`, `registerDevCtrls` on `0x82xx`) | Only messages coming in from the HUD/cluster (results, status): it gets copies of incoming messages, not of what another client sends. Good to confirm FBlock `0x82` and its instance | Installing and running a program (a write) |
+| BMW's own MOST spy, in the `most` process | Every MOST message passing through the server, both directions: it has `MOSTSpy` / `MOSTBinarySpy` trace channels that dump messages in binary (`trcDumpMostMessageBinary`) | Switching the channel on through BMW's trace framework: per-process trace settings in `/var/opt/sys/persistTrace<process>.bin`, or the HBDebug DSI interface at run time. Output goes to the trace buffers and `/mnt/quota/sys/trace/`. How to switch it on and decode it is not known yet |
+| Logging library preloaded into `NavNBTEvoController` | Every HUDTerminal command it sends: they all go through `CHBLogFuncMethodUnclassified::sendAck` in BMW's MOST library (19 of its 28 call sites are in the HUDTerminal code; the function id sits at offset 18 of the object, so other FBlocks can be filtered out) | QNX toolchain, installing the library, restarting the nav controller with it (started from `/opt/sys/etc/starter.cfg`), an off switch |
+
+Steps:
+1. **Read-only car visit** (`tools/fetch_capture_deps.sh`, over SSH, nothing written on the head unit): BMW's MOST
+   library `libimp_sys_most_base_nbt*.so` (how parameters are packed), the trace libraries and
+   `trace-recorder-app`, `starter.cfg`, the FBlock mapping configuration, and listings of `/var/opt/sys` and
+   `/mnt/quota/sys/trace/`.
+2. **Offline:** parameter packing from the MOST library; how the spy channel is switched on and what its output
+   looks like.
+3. **On the car, each write approved by the owner:** BMW's spy first (a small, reversible settings change); the
+   preloaded logger if the spy can't be used; optionally the repository's MOST client on `0x82` as a check.
+4. **Capture** while BMW navigation guides through a few turns, then decode it against the table in section 8.
+
+The preloaded logger and the MOST client both need the QNX 6.5 build setup (`build.sh`: the QNX SDP 6.5 Docker
+image and a QNX license file).
