@@ -137,6 +137,116 @@ static void testLinkPacket() {
     CHECK(parseLinkPacket(&w2[0], w2.size(), back) == w2.size() && back.seq == 0x2B && back.payload == patched);
 }
 
+// The car's own CarPlay IdentificationInformation (NBTevo_R19144I, Wi-Fi session), rebuilt from mm-ipod's decoded
+// log of 2026-11-01. Car name and serial number are replaced by placeholders of the same length; everything else,
+// order and sizes included, is as captured.
+static void eaProtocol(MessageBuilder& b, uint8_t id, const char* name) {
+    b.group(10, MessageBuilder(0).u8(0, id).str(1, name).u8(2, 1).paramsOnly());
+}
+
+static std::vector<uint8_t> carIdentification() {
+    const uint8_t sent[] = { 0xEA,0x02, 0x50,0x00, 0x50,0x02, 0x50,0x03, 0xAE,0x00, 0xAE,0x02, 0xFF,0xFB, 0x41,0x54,
+                             0x41,0x56, 0x41,0x57, 0x41,0x59, 0x41,0x5A, 0x41,0x5B, 0x41,0x5C, 0x41,0x5D, 0x41,0x5E,
+                             0x41,0x5F, 0x41,0x60, 0x41,0x61, 0x57,0x00, 0x57,0x03, 0x10,0xDA, 0x10,0xDC, 0x10,0xDD };
+    const uint8_t recv[] = { 0xEA,0x00, 0xEA,0x01, 0x50,0x01, 0xAE,0x01, 0xFF,0xFA, 0xFF,0xFC, 0x41,0x55, 0x41,0x58,
+                             0x4E,0x09, 0x4E,0x0A, 0x4E,0x0B, 0x4E,0x0C, 0x4E,0x0D, 0x57,0x01, 0x57,0x02, 0x10,0xDB };
+    MessageBuilder b(MSG_IDENTIFICATION_INFORMATION);
+    b.str(0, "BMW 00000").str(1, "F33-NBTEvo-0716").str(2, "BMW").str(3, "000000000").str(4, "NBTevo_R19144I")
+     .str(5, "03").raw(IDP_MESSAGES_SENT_BY_ACCESSORY, sent, sizeof(sent))
+     .raw(IDP_MESSAGES_RECEIVED_FROM_DEVICE, recv, sizeof(recv)).u8(8, 0).u16(9, 0);
+    eaProtocol(b, 0x10, "com.bmw.carplay");
+    for (int i = 15; i >= 1; --i) {
+        char name[16];
+        sprintf(name, "com.bmw.a4a%d", i);
+        eaProtocol(b, (uint8_t)i, name);
+    }
+    eaProtocol(b, 0x00, "com.bmw.a4a");
+    b.str(12, "en").str(13, "en").str(13, "fr");
+    b.group(20, MessageBuilder(0).u16(0, 0x0D05).str(1, "Vehicle Information").str(6, "BMW 00000")
+                                 .str(8, "BMW NAV").paramsOnly());
+    b.group(22, MessageBuilder(0).u16(0, 0x04D2).str(1, "Location").none(17).none(18).none(20).paramsOnly());
+    b.group(24, MessageBuilder(0).u16(0, 0x08AE).str(1, "BMW 00000").none(2).none(4).paramsOnly());
+    return b.build();
+}
+
+static void testCarIdentification() {
+    std::vector<uint8_t> id = carIdentification();
+    Message orig = parse(id);
+    // Sizes as logged by mm-ipod: the whole message, then every top-level parameter (id, length incl. header).
+    CHECK(id.size() == 870);
+    static const uint16_t kLogged[][2] = {
+        {0,14}, {1,20}, {2,8}, {3,14}, {4,19}, {5,7}, {6,52}, {7,36}, {8,5}, {9,6},
+        {10,34}, {10,32}, {10,32}, {10,32}, {10,32}, {10,32}, {10,32}, {10,31}, {10,31}, {10,31}, {10,31},
+        {10,31}, {10,31}, {10,31}, {10,31}, {10,31}, {10,30}, {12,7}, {13,7}, {13,7}, {20,60}, {22,35}, {24,32}
+    };
+    const size_t nLogged = sizeof(kLogged) / sizeof(kLogged[0]);
+    CHECK(orig.params.size() == nLogged);
+    for (size_t i = 0; i < nLogged && i < orig.params.size(); ++i)
+        CHECK(orig.params[i].id == kLogged[i][0] && orig.params[i].len + 4 == kLogged[i][1]);
+
+    // The real link header of that packet: FF 5A 03 70 | control 40 | seq 67 | ack 08 | session 01 | checksum 84.
+    LinkPacket lp;
+    lp.control = 0x40; lp.seq = 0x67; lp.ack = 0x08; lp.session = 0x01;
+    lp.payload = id;
+    std::vector<uint8_t> w = buildLinkPacket(lp);
+    const uint8_t hdr[] = { 0xFF, 0x5A, 0x03, 0x70, 0x40, 0x67, 0x08, 0x01, 0x84 };
+    CHECK(w.size() == 880 && memcmp(&w[0], hdr, sizeof(hdr)) == 0);
+    // More real headers from the same log (ACK, StartIdentification, IdentificationAccepted).
+    const uint8_t seen[][9] = { { 0xFF, 0x5A, 0x00, 0x09, 0x40, 0x66, 0x08, 0x00, 0xF0 },
+                                { 0xFF, 0x5A, 0x00, 0x10, 0x40, 0x08, 0x66, 0x01, 0xE8 },
+                                { 0xFF, 0x5A, 0x00, 0x10, 0x40, 0x09, 0x67, 0x01, 0xE6 } };
+    for (size_t i = 0; i < 3; ++i) CHECK(iap2Checksum(seen[i], 8) == seen[i][8]);
+
+    ComponentConfig cfg;
+    std::vector<uint8_t> out;
+    CHECK(patchIdentification(&id[0], id.size(), cfg, out) == PATCH_DONE);
+    Message m = parse(out);
+    CHECK(m.params.size() == orig.params.size() + 1);
+    std::vector<uint16_t> sent0, recv0, sent, recv;
+    for (size_t i = 0; i < orig.params.size() && i < m.params.size(); ++i) {
+        const Param& a = orig.params[i];
+        const Param& p = m.params[i];
+        CHECK(p.id == a.id);
+        if (a.id == IDP_MESSAGES_SENT_BY_ACCESSORY) { pAppend16(a, sent0); pAppend16(p, sent); }
+        else if (a.id == IDP_MESSAGES_RECEIVED_FROM_DEVICE) { pAppend16(a, recv0); pAppend16(p, recv); }
+        else CHECK(p.len == a.len && memcmp(p.data, a.data, a.len) == 0);   // everything else byte-identical
+    }
+    // Existing ids untouched and first; the new ones appended, none of them already used by the car.
+    CHECK(sent0.size() == 24 && recv0.size() == 16);
+    CHECK(sent.size() == 26 && sent[24] == MSG_START_ROUTE_GUIDANCE && sent[25] == MSG_STOP_ROUTE_GUIDANCE);
+    CHECK(recv.size() == 18 && recv[16] == MSG_ROUTE_GUIDANCE_UPDATE && recv[17] == MSG_ROUTE_GUIDANCE_MANEUVER);
+    for (size_t i = 0; i < 24; ++i) CHECK(sent[i] == sent0[i] && (sent0[i] & 0xFF00) != 0x5200);
+    for (size_t i = 0; i < 16; ++i) CHECK(recv[i] == recv0[i] && (recv0[i] & 0xFF00) != 0x5200);
+
+    // Component last, after the WiFiTransportComponent (24), with an id no other component of the car uses.
+    const Param& comp = m.params.back();
+    CHECK(comp.id == IDP_ROUTE_GUIDANCE_DISPLAY_COMPONENT && m.params[m.params.size() - 2].id == 24);
+    std::vector<Param> sub;
+    CHECK(parseParams(comp.data, comp.len, sub) && !sub.empty() && sub[0].id == RGC_ID);
+    const uint16_t used[] = { 0x0D05, 0x04D2, 0x08AE, 0x0457 /* Bluetooth transport, first session */ };
+    for (size_t i = 0; i < sizeof(used) / sizeof(used[0]); ++i) CHECK(cfg.componentId != used[i]);
+    CHECK(out.size() == id.size() + 4 + 4 + comp.len + 4);
+
+    // Back into a link packet: same control/seq/ack/session, valid checksums, well within mm-ipod's 32 KB packets.
+    LinkPacket in, back;
+    CHECK(parseLinkPacket(&w[0], w.size(), in) == w.size());
+    in.payload = out;
+    std::vector<uint8_t> w2 = buildLinkPacket(in);
+    CHECK(parseLinkPacket(&w2[0], w2.size(), back) == w2.size());
+    CHECK(back.control == 0x40 && back.seq == 0x67 && back.ack == 0x08 && back.session == 0x01 && back.payload == out);
+    CHECK(w2.size() < 32768);
+
+    // Lanes on: 0x5204 requested as well; patching the patched message changes nothing.
+    cfg.maxLaneCapacity = 4; cfg.maxLaneDescription = 64;
+    CHECK(patchIdentification(&id[0], id.size(), cfg, out) == PATCH_DONE);
+    m = parse(out);
+    recv.clear();
+    pAppend16(m.params[7], recv);
+    CHECK(m.params[7].id == IDP_MESSAGES_RECEIVED_FROM_DEVICE && recv.size() == 19 && recv[18] == MSG_LANE_GUIDANCE_INFORMATION);
+    std::vector<uint8_t> again;
+    CHECK(patchIdentification(&out[0], out.size(), cfg, again) == PATCH_ALREADY);
+}
+
 static void testStartStop() {
     std::vector<uint8_t> s = buildStartRouteGuidance(0x5242, true, true);
     Message m = parse(s);
@@ -245,6 +355,7 @@ int main() {
     testHandAssembledManeuver();
     testIdentificationPatch();
     testLinkPacket();
+    testCarIdentification();
     testStartStop();
     testTracker();
     testArrowTable();
