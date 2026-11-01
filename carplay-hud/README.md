@@ -119,7 +119,7 @@ Each step depends on the one before it, and nothing that changes the car comes b
 
 | | |
 |---|---|
-| Car | 2018 BMW 440i Convertible (F33 LCI), US market |
+| Car | 2018 BMW 440i Convertible (F33 LCI), built for the US, re-imported to Europe and coded EU (`4Z51` instead of `4Z53`) |
 | Head unit | NBT EVO (ID6), software `NBTevo_R191441` (the Android Auto daemon was developed on `NBTevo_T21424I`) |
 | Cluster | 6WB: shows BMW navigation **arrows** only, no video map (owner-confirmed) |
 | HUD | Factory HUD, shows BMW navigation arrows |
@@ -130,7 +130,10 @@ What follows from this:
   feature) is ruled out on the car side. Getting the iPhone to send a second map stream would be a large job on its
   own anyway. The target is turn arrows, distance and street name on the HUD, and on the 6WB too wherever BMW's own
   arrows appear.
-- **US market.** Expect distances in miles/feet (`DU_MILES`, `DU_FT`, already decoded) and right-hand traffic.
+- **US car, EU coding.** The car is coded metric (km/h), so the HUD should show km/m, with right-hand traffic. The
+  iPhone picks the units of its route guidance from its own region settings, so they may still arrive in miles, yards
+  or feet. All units are decoded (`DU_KM`, `DU_M`, `DU_MILES`, `DU_YARDS`, `DU_FT`); the HUD output (step 4, not written
+  yet) has to convert them to the car's units. The US-to-EU recoding may also change market-dependent behaviour on the head unit; the recon should show it.
 - **Different software version.** `R191441` is not the version this repository was built and tested on, so the
   process names, libraries and paths from `milestone-7` are hints until the recon confirms them.
 
